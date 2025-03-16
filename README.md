@@ -1,36 +1,32 @@
+# Auto Trader Car Price Prediction API
 
-# Airbnb Rental Price Prediction API
-
-This is a Flask-based API that predicts Airbnb rental prices based on several factors like bedrooms, bathrooms, accommodation capacity, and neighborhood. The API has two main endpoints:
+This is a Flask-based API that predicts used car prices based on several factors like make, model, year, and mileage. The API has two main endpoints:
 - `/reload`: Reloads the data and trains the model.
-- `/predict`: Predicts the rental price for a given listing.
+- `/predict`: Predicts the price for a given car.
 
 ## Data Source and Prediction Process
 
 ### Data Source
 
-The data used for this project comes from the [Inside Airbnb dataset](https://insideairbnb.com/get-the-data/), which provides detailed information about Airbnb listings in various cities. For this particular app, the data for Boston, MA is used.
+The data used for this project comes from the [Auto Trader Car Sale Adverts Dataset](https://www.kaggle.com/datasets/shayanshahid997/autotrader-at-car-sale-adverts-dataset), which provides detailed information about Auto Trader vehicle listings.
 
 The dataset includes important features such as:
-- **Price**: The rental price of the listing.
-- **Bedrooms**: The number of bedrooms in the listing.
-- **Bathrooms**: The number of bathrooms in the listing.
-- **Accommodates**: The maximum number of guests the listing can accommodate.
-- **Neighbourhood**: The neighborhood where the listing is located.
-
-The full dataset can be accessed and downloaded from the Inside Airbnb website at [Inside Airbnb - Get the Data](https://insideairbnb.com/get-the-data/).
+- **Price**: The selling price of the car
+- **Mileage**: The total mileage of the car
+- **Year of Registration**: The year the car was registered
+- **Make**: The manufacturer of the car
+- **Model**: The model name of the car
 
 ### Prediction Process
 
-The application makes use of a simple **Linear Regression Model** to predict the rental price of an Airbnb listing based on various input features such as the number of bedrooms, bathrooms, accommodation capacity, and the neighborhood.
+The application makes use of a simple **Linear Regression Model** to predict the price of a used car based on various input features such as mileage, year of registration, make, and model.
 
 The process of prediction is as follows:
-1. **Data Preprocessing**: The data is cleaned and processed. Non-numeric values are removed or converted, and categorical variables like `neighbourhood` are one-hot encoded to make them suitable for machine learning models.
-2. **Model Training**: A linear regression model is trained on the cleaned dataset using features like bedrooms, bathrooms, accommodates, and one-hot encoded neighborhood values.
-3. **Prediction**: Once trained, the model can predict the rental price based on user input, such as the number of bedrooms, bathrooms, and neighborhood.
+1. **Data Preprocessing**: The data is cleaned and processed. Non-numeric values are removed or converted, and categorical variables like `make` and `model` are one-hot encoded.
+2. **Model Training**: A linear regression model is trained on the cleaned dataset using features like mileage, year of registration, and one-hot encoded make and model values.
+3. **Prediction**: Once trained, the model can predict the car price based on user input.
 
-By using this model, the app can provide quick rental price predictions for Airbnb listings in Boston based on historical data.
-
+By using this model, the app can provide quick car price predictions for Auto Trader listings.
 
 ## Prerequisites
 
@@ -45,7 +41,7 @@ Before you can set up and run this app, ensure you have the following software i
 ### 1. Clone the Repository
 First, clone this repository to your local machine:
 ```bash
-git clone https://github.com/tjhoranumass/airbnb.git
+git clone https://github.com/DanaKChilds/airbnb.git
 cd airbnb
 ```
 
@@ -147,10 +143,10 @@ To predict a rental price, you can use the `/predict` endpoint. Here's an exampl
 curl -X POST http://127.0.0.1:5000/predict \
   -H 'Content-Type: application/json' \
   -d '{
-    "bedrooms": 2,
-    "bathrooms": 1.5,
-    "accommodates": 4,
-    "neighbourhood_cleansed": "South Boston"
+  "make": "Toyota",
+  "mileage": 80000,
+  "model": "Camry",
+  "year": 2006
 }'
 ```
 
