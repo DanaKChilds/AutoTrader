@@ -9,61 +9,69 @@ import requests
 import gzip
 from io import BytesIO
 from flasgger import Swagger
+import zipfile
+import io
+import urllib.request
 
 app = Flask(__name__)
 
 # Swagger config
 app.config['SWAGGER'] = {
-    'title': 'Airbnb Rental Price Prediction API',
-    'uiversion': 3
-}
+    'title': 'Auto Trader Car Price Prediction API',
+    'uiversion': 3}
 swagger = Swagger(app)
 
 # SQLite DB setup
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///listings.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cars.db'
 db = SQLAlchemy(app)
 
-# Define a database model
-class Listing(db.Model):
+# Define database model for cars
+class Car(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     price = db.Column(db.Float, nullable=False)
-    bedrooms = db.Column(db.Integer, nullable=False)
-    bathrooms = db.Column(db.Float, nullable=False)
-    accommodates = db.Column(db.Integer, nullable=False)
-    neighbourhood = db.Column(db.String(100), nullable=False)
+    mileage = db.Column(db.Integer)
+    year_of_registration = db.Column(db.Integer)
+    standard_make = db.Column(db.String(50))
+    standard_model = db.Column(db.String(50))
 
-# Create the database
 with app.app_context():
     db.create_all()
 
-def preprocess_data(df):
-    # Clean the price column
-    df['price'] = df['price'].replace({'\$': '', ',': ''}, regex=True).astype(float)
-
-    # Drop rows where any of the key fields are NaN
-    df = df.dropna(subset=['price', 'bedrooms', 'bathrooms', 'accommodates', 'neighbourhood_cleansed'])
-
-    # One more time, fill any missing numerical values with the median, just in case
-    df['bedrooms'] = df['bedrooms'].fillna(df['bedrooms'].median())
-    df['bathrooms'] = df['bathrooms'].fillna(df['bathrooms'].median())
-    df['accommodates'] = df['accommodates'].fillna(df['accommodates'].median())
-
-    # Fill missing categorical values (neighbourhood) with the most frequent value
-    df['neighbourhood_cleansed'] = df['neighbourhood_cleansed'].fillna(df['neighbourhood_cleansed'].mode()[0])
-
-    # One-hot encode the 'neighbourhood_cleansed' column
-    encoder = OneHotEncoder(sparse_output=False)
-    neighbourhood_encoded = encoder.fit_transform(df[['neighbourhood_cleansed']])
-
-    # Create a DataFrame for the one-hot encoded neighborhoods
-    neighbourhood_encoded_df = pd.DataFrame(neighbourhood_encoded, columns=encoder.get_feature_names_out(['neighbourhood_cleansed']))
-
-    # Concatenate the encoded neighborhood with the original dataframe
-    df = pd.concat([df, neighbourhood_encoded_df], axis=1).drop(columns=['neighbourhood_cleansed'])
-
-    # Drop any rows that still have NaN values at this point (forcefully)
-    df = df.dropna()
-    return df, encoder
+def preprocess_data(df, encoder=None, training=False):
+    df = df.copy()
+    
+    # Clean numeric columns
+    numeric_cols = ['price', 'mileage', 'year_of_registration']
+    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+    
+    # Filter invalid data only during training
+    if training:
+        mask = (
+            df['price'].notna() &
+            (df['price'] > 0) & 
+            (df['price'] < 1000000) &
+            df['mileage'].notna() &
+            (df['mileage'] >= 0) &
+            df['year_of_registration'].notna() &
+            (df['year_of_registration'] >= 1900))
+        df = df[mask].copy()
+    
+    # Clean categorical columns
+    categorical_cols = ['standard_make', 'standard_model']
+    df[categorical_cols] = df[categorical_cols].fillna('Unknown').astype(str)
+    
+    # Create features
+    if training:
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+        encoded_cats = encoder.fit_transform(df[categorical_cols])
+    else:
+        encoded_cats = encoder.transform(df[categorical_cols])
+    
+    # Create final features
+    numeric_data = df[['mileage', 'year_of_registration']].values
+    processed_data = np.column_stack((numeric_data, encoded_cats))
+    
+    return processed_data, encoder, df
 
 # Global variables for model and encoder
 model = None
@@ -72,64 +80,82 @@ encoder = None
 @app.route('/reload', methods=['POST'])
 def reload_data():
     '''
-    Reload data from the Airbnb dataset, clear the database, load new data, and return summary stats
+    Load car listing data from CSV, process it, and train the model
     ---
     responses:
       200:
-        description: Summary statistics of reloaded data
+        description: Summary statistics of loaded data
     '''
     global model, encoder
+    
+    try:
+        # Download and unzip data from GitHub
+        url = 'https://github.com/DanaKChilds/airbnb/raw/refs/heads/master/AML_dataset.csv.zip'
+        response = urllib.request.urlopen(url)
+        zip_data = io.BytesIO(response.read())
+        
+        with zipfile.ZipFile(zip_data) as zip_file:
+            csv_filename = zip_file.namelist()[0]  # Get the CSV filename from the zip
+            with zip_file.open(csv_filename) as csv_file:
+                cars_df = pd.read_csv(csv_file)
+                
+        # Verify required columns exist
+        required_columns = ['price', 'mileage', 'year_of_registration', 
+                          'standard_make', 'standard_model']
+        missing_columns = [col for col in required_columns if col not in cars_df.columns]
+        if missing_columns:
+            return jsonify({"error": f"Missing required columns: {missing_columns}"}), 400
 
-    # Step 1: Download and decompress data
-    url = 'https://data.insideairbnb.com/united-states/ma/boston/2024-06-22/data/listings.csv.gz'
-    response = requests.get(url)
-    compressed_file = BytesIO(response.content)
-    decompressed_file = gzip.GzipFile(fileobj=compressed_file)
+        # Convert price column if it contains currency symbols or commas
+        if 'price' in cars_df.columns:
+            cars_df['price'] = cars_df['price'].astype(str).str.replace('£','').str.replace(',','')
+            cars_df['price'] = pd.to_numeric(cars_df['price'], errors='coerce')
+            
+        # Convert mileage to numeric
+        if 'mileage' in cars_df.columns:
+            cars_df['mileage'] = pd.to_numeric(cars_df['mileage'].astype(str).str.replace(r'[^\d.]', ''), 
+                                             errors='coerce')
+    
+        # Clear existing database
+        db.session.query(Car).delete()
+        
+        # Process and insert data
+        for _, row in cars_df.iterrows():
+            new_car = Car(
+                price=row['price'],
+                mileage=row['mileage'],
+                year_of_registration=row['year_of_registration'],
+                standard_make=row['standard_make'],
+                standard_model=row['standard_model'])
+            db.session.add(new_car)
+        db.session.commit()
 
-    # Step 2: Load data into pandas
-    listings = pd.read_csv(decompressed_file)
+        # Preprocess data and train model
+        processed_data, encoder, filtered_df = preprocess_data(cars_df, training=True)
+        X = processed_data
+        y = filtered_df['price'].values
+        
+        model = LinearRegression()
+        model.fit(X, y)
 
-    # Step 3: Clear the database
-    db.session.query(Listing).delete()
+        # Generate summary statistics
+        summary = {
+            'total_listings': int(len(filtered_df)),
+            'average_price': float(filtered_df['price'].mean()),
+            'min_price': float(filtered_df['price'].min()),
+            'max_price': float(filtered_df['price'].max()),
+            'average_mileage': float(filtered_df['mileage'].mean()),
+            'most_common_makes': {k: int(v) for k, v in filtered_df['standard_make'].value_counts().head().to_dict().items()}}
 
-    # Step 4: Process data and insert it into the database
-    listings = listings[['price', 'bedrooms', 'bathrooms', 'accommodates', 'neighbourhood_cleansed']].dropna()
-    listings['price'] = listings['price'].replace({'\$': '', ',': ''}, regex=True).astype(float)
+        return jsonify(summary)
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to load data: {str(e)}"}), 500
 
-    for _, row in listings.iterrows():
-        new_listing = Listing(
-            price=row['price'],
-            bedrooms=int(row['bedrooms']),
-            bathrooms=row['bathrooms'],
-            accommodates=int(row['accommodates']),
-            neighbourhood=row['neighbourhood_cleansed']
-        )
-        db.session.add(new_listing)
-    db.session.commit()
-
-    # Step 5: Preprocess and train model
-    df, encoder = preprocess_data(listings)
-    X = df.drop(columns='price')
-    y = df['price']
-    model = LinearRegression()
-    model.fit(X, y)
-
-    # Step 6: Generate summary statistics
-    summary = {
-        'total_listings': len(listings),
-        'average_price': listings['price'].mean(),
-        'min_price': listings['price'].min(),
-        'max_price': listings['price'].max(),
-        'average_bedrooms': listings['bedrooms'].mean(),
-        'average_bathrooms': listings['bathrooms'].mean(),
-        'top_neighbourhoods': listings['neighbourhood_cleansed'].value_counts().head().to_dict()
-    }
-
-    return jsonify(summary)
 @app.route('/predict', methods=['POST'])
 def predict():
     '''
-    Predict the rental price for an Airbnb listing
+    Predict car price based on features
     ---
     parameters:
       - name: body
@@ -138,63 +164,54 @@ def predict():
         schema:
           type: object
           properties:
-            bedrooms:
-              type: integer
-            bathrooms:
-              type: number
-            accommodates:
-              type: integer
-            neighbourhood_cleansed:
+            make:
               type: string
+              description: Car manufacturer
+              required: true
+            model:
+              type: string
+              description: Car model
+              required: true
+            year:
+              type: integer
+              description: Year of registration
+              required: true
+            mileage:
+              type: integer
+              description: Current mileage of the car
+              required: true
     responses:
       200:
-        description: Predicted rental price
+        description: Predicted car price
     '''
-    global model, encoder  # Ensure that the encoder and model are available for prediction
-
-    # Define the list of valid neighborhoods
-    valid_neighborhoods = [
-        "East Boston", "Roxbury", "Beacon Hill", "Back Bay", "North End", "Dorchester",
-        "Charlestown", "Jamaica Plain", "Downtown", "South Boston", "Bay Village",
-        "Brighton", "West Roxbury", "Roslindale", "South End", "Mission Hill",
-        "Fenway", "Allston", "Hyde Park", "West End", "Mattapan", "Leather District",
-        "South Boston Waterfront", "Chinatown", "Longwood Medical Area"
-    ]
-
-    # Check if the model and encoder are initialized
+    global model, encoder
+    
     if model is None or encoder is None:
-        return jsonify({"error": "The data has not been loaded. Please refresh the data by calling the '/reload' endpoint first."}), 400
-
+        return jsonify({"error": "Model not loaded. Call /reload first."}), 400
+        
+    # Validate required parameters
+    required_params = ['make', 'model', 'year', 'mileage']
+    if not all(param in request.json for param in required_params):
+        return jsonify({"error": "Missing required parameters. Required: make, model, year, mileage"}), 400
+        
     data = request.json
+    
     try:
-        bedrooms = pd.to_numeric(data.get('bedrooms'), errors='coerce')
-        bathrooms = pd.to_numeric(data.get('bathrooms'), errors='coerce')
-        accommodates = pd.to_numeric(data.get('accommodates'), errors='coerce')
-        neighbourhood = data.get('neighbourhood_cleansed')
+        # Create input DataFrame with parameters in specified order
+        input_df = pd.DataFrame([{
+            'standard_make': data['make'],
+            'standard_model': data['model'],
+            'year_of_registration': data['year'],
+            'mileage': data['mileage'],
+            'price': 0}])
 
-        if None in [bedrooms, bathrooms, accommodates, neighbourhood]:
-            return jsonify({"error": "Missing or invalid required parameters"}), 400
-
-        # Check if the neighborhood is valid
-        if neighbourhood not in valid_neighborhoods:
-            return jsonify({"error": f"Invalid neighborhood. Please choose one of the following: {', '.join(valid_neighborhoods)}"}), 400
-
-        # Check for NaN values in the converted inputs
-        if pd.isna(bedrooms) or pd.isna(bathrooms) or pd.isna(accommodates):
-            return jsonify({"error": "Invalid numeric values for bedrooms, bathrooms, or accommodates"}), 400
-
-        # Transform the input using the global encoder
-        neighbourhood_encoded = encoder.transform([[neighbourhood]])
-        input_data = np.concatenate(([bedrooms, bathrooms, accommodates], neighbourhood_encoded[0]))
-        input_data = input_data.reshape(1, -1)
-
-        # Predict the price
-        predicted_price = model.predict(input_data)[0]
-
-        return jsonify({"predicted_price": predicted_price})
+        # Preprocess and predict
+        processed_data, _, _ = preprocess_data(input_df, encoder=encoder, training=False)
+        predicted_price = model.predict(processed_data)[0]
+        return jsonify({"predicted_price": float(predicted_price)})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Prediction error: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
