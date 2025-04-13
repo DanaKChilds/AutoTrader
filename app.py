@@ -90,7 +90,7 @@ def reload_data():
     
     try:
         # Download and unzip data from GitHub
-        url = 'https://github.com/DanaKChilds/airbnb/raw/refs/heads/master/AML_dataset.csv.zip'
+        url = 'https://github.com/DanaKChilds/AutoTrader/raw/refs/heads/master/AML_dataset.csv.zip'
         response = urllib.request.urlopen(url)
         zip_data = io.BytesIO(response.read())
         
