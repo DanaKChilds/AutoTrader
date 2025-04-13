@@ -41,8 +41,8 @@ Before you can set up and run this app, ensure you have the following software i
 ### 1. Clone the Repository
 First, clone this repository to your local machine:
 ```bash
-git clone https://github.com/DanaKChilds/airbnb.git
-cd airbnb
+git clone (https://github.com/DanaKChilds/AutoTrader)
+cd AutoTrader
 ```
 
 ### 2. Create a Virtual Environment (Optional but Recommended)
