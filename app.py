@@ -1,217 +1,129 @@
-from flask import Flask, jsonify, request
-from flask_sqlalchemy import SQLAlchemy
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
+import streamlit as st
 import pandas as pd
+import plotly.express as px
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import OneHotEncoder
 import numpy as np
-import requests
-import gzip
-from io import BytesIO
-from flasgger import Swagger
+import urllib.request
 import zipfile
 import io
-import urllib.request
 
-app = Flask(__name__)
+# Data Load and Clean
 
-# Swagger config
-app.config['SWAGGER'] = {
-    'title': 'Auto Trader Car Price Prediction API',
-    'uiversion': 3}
-swagger = Swagger(app)
+@st.cache_data
+def load_data():
+    """Load and cache data from GitHub"""
+    url = 'https://github.com/DanaKChilds/AutoTrader/raw/refs/heads/master/AML_dataset.csv.zip'
+    with urllib.request.urlopen(url) as response:
+        with zipfile.ZipFile(io.BytesIO(response.read())) as zip_file:
+            with zip_file.open(zip_file.namelist()[0]) as csv_file:
+                return pd.read_csv(csv_file)
 
-# SQLite DB setup
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cars.db'
-db = SQLAlchemy(app)
-
-# Define database model for cars
-class Car(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    price = db.Column(db.Float, nullable=False)
-    mileage = db.Column(db.Integer)
-    year_of_registration = db.Column(db.Integer)
-    standard_make = db.Column(db.String(50))
-    standard_model = db.Column(db.String(50))
-
-with app.app_context():
-    db.create_all()
-
-def preprocess_data(df, encoder=None, training=False):
+def clean_data(df):
+    """Clean and filter data"""
+    numeric_cols = ['price', 'mileage', 'year_of_registration']
     df = df.copy()
     
-    # Clean numeric columns
-    numeric_cols = ['price', 'mileage', 'year_of_registration']
+    # Ensure values are numeric
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+    df = df.dropna(subset=numeric_cols)
     
-    # Filter invalid data only during training
-    if training:
-        mask = (
-            df['price'].notna() &
-            (df['price'] > 0) & 
-            (df['price'] < 1000000) &
-            df['mileage'].notna() &
-            (df['mileage'] >= 0) &
-            df['year_of_registration'].notna() &
-            (df['year_of_registration'] >= 1900))
-        df = df[mask].copy()
+    # Removing Outliers
+    masks = {
+        'price': (df['price'] >= 500) & (df['price'] <= 700000),
+        'mileage': (df['mileage'] >= 0) & (df['mileage'] <= 400000),
+        'year_of_registration': (df['year_of_registration'] >= 1980) & 
+                              (df['year_of_registration'] <= 2025)
+    }
+    return df[np.all([masks[col] for col in numeric_cols], axis=0)]
+
+# Data Vizualizations 
+
+def create_visualization(df, viz_type, selected_make):
+    """Create visualization based on type"""
+    viz_df = df if selected_make == "All" else df[df["standard_make"] == selected_make]
     
-    # Clean categorical columns
-    categorical_cols = ['standard_make', 'standard_model']
-    df[categorical_cols] = df[categorical_cols].fillna('Unknown').astype(str)
-    
-    # Create features
-    if training:
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        encoded_cats = encoder.fit_transform(df[categorical_cols])
+    if viz_type == "Price Distribution":
+        return px.histogram(viz_df, x="price", 
+                          title="Car Price Distribution",
+                          labels={"price": "Price ($)", "count": "Number of Cars"})
+    elif viz_type == "Price vs. Mileage":
+        return px.scatter(viz_df, x="mileage", y="price",
+                         title="Price vs. Mileage",
+                         labels={"mileage": "Mileage", "price": "Price ($)"})
     else:
-        encoded_cats = encoder.transform(df[categorical_cols])
-    
-    # Create final features
-    numeric_data = df[['mileage', 'year_of_registration']].values
-    processed_data = np.column_stack((numeric_data, encoded_cats))
-    
-    return processed_data, encoder, df
+        avg_price = viz_df.groupby("standard_make")["price"].mean().reset_index()
+        return px.bar(avg_price, x="standard_make", y="price",
+                     title="Average Price by Make",
+                     labels={"standard_make": "Make", "price": "Average Price ($)"})
 
-# Global variables for model and encoder
-model = None
-encoder = None
+# Prediction Model
 
-@app.route('/reload', methods=['POST'])
-def reload_data():
-    '''
-    Load car listing data from CSV, process it, and train the model
-    ---
-    responses:
-      200:
-        description: Summary statistics of loaded data
-    '''
-    global model, encoder
+@st.cache_resource
+def train_model(df):
+    """Train and cache the price prediction model"""
+    X = df[['mileage', 'year_of_registration']].values
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+    make_model = encoder.fit_transform(df[['standard_make', 'standard_model']])
+    X = np.column_stack((X, make_model))
     
-    try:
-        # Download and unzip data from GitHub
-        url = 'https://github.com/DanaKChilds/AutoTrader/raw/refs/heads/master/AML_dataset.csv.zip'
-        response = urllib.request.urlopen(url)
-        zip_data = io.BytesIO(response.read())
+    model = LinearRegression()
+    model.fit(X, df['price'].values)
+    return model, encoder
+
+def main():
+    st.title("Car Price Analysis Dashboard")
+    
+    # Load and clean data
+    if 'data' not in st.session_state or st.sidebar.button("Reload Data"):
+        with st.spinner("Loading data..."):
+            df = clean_data(load_data())
+            st.session_state.data = df
+            st.success("Data loaded successfully!")
+    
+    df = st.session_state.data
+    
+    # Display summary statistics
+    st.sidebar.header("Summary Statistics")
+    st.sidebar.write(f"Total Cars: {len(df):,}")
+    st.sidebar.write(f"Average Price: ${df['price'].mean():,.2f}")
+    st.sidebar.write(f"Average Mileage: {df['mileage'].mean():,.0f}")
+    
+    # Create tabs for analysis and prediction
+    tab1, tab2 = st.tabs(["Price Prediction", "Data Analysis"])
+    
+    with tab1:
+        st.header("Predict Car Price")
+        make = st.selectbox("Make", sorted(df["standard_make"].unique()), key="pred_make")
+        models = sorted(df[df["standard_make"] == make]["standard_model"].unique())
+        model = st.selectbox("Model", models, key="pred_model")
+        year = st.number_input("Year", min_value=1980, max_value=2025, value=2020)
+        mileage = st.number_input("Mileage", min_value=0, max_value=500000, value=50000)
         
-        with zipfile.ZipFile(zip_data) as zip_file:
-            csv_filename = zip_file.namelist()[0]  # Get the CSV filename from the zip
-            with zip_file.open(csv_filename) as csv_file:
-                cars_df = pd.read_csv(csv_file)
-                
-        # Verify required columns exist
-        required_columns = ['price', 'mileage', 'year_of_registration', 
-                          'standard_make', 'standard_model']
-        missing_columns = [col for col in required_columns if col not in cars_df.columns]
-        if missing_columns:
-            return jsonify({"error": f"Missing required columns: {missing_columns}"}), 400
-
-        # Convert price column if it contains currency symbols or commas
-        if 'price' in cars_df.columns:
-            cars_df['price'] = cars_df['price'].astype(str).str.replace('£','').str.replace(',','')
-            cars_df['price'] = pd.to_numeric(cars_df['price'], errors='coerce')
+        if st.button("Predict"):
+            model, encoder = train_model(df)
+            input_data = pd.DataFrame([{
+                'standard_make': make,
+                'standard_model': model,
+                'mileage': mileage,
+                'year_of_registration': year
+            }])
             
-        # Convert mileage to numeric
-        if 'mileage' in cars_df.columns:
-            cars_df['mileage'] = pd.to_numeric(cars_df['mileage'].astype(str).str.replace(r'[^\d.]', ''), 
-                                             errors='coerce')
+            X = input_data[['mileage', 'year_of_registration']].values
+            make_model = encoder.transform(input_data[['standard_make', 'standard_model']])
+            X = np.column_stack((X, make_model))
+            
+            price = model.predict(X)[0]
+            st.success(f"Predicted Price: ${price:,.2f}")
+
+    with tab2:
+        viz_type = st.selectbox("Choose Visualization",
+                              ["Price Distribution", "Price vs. Mileage", "Average Price by Make"])
+        makes = ["All"] + sorted(df["standard_make"].unique().tolist())
+        selected_make = st.selectbox("Select Make", makes)
+        
+        fig = create_visualization(df, viz_type, selected_make)
+        st.plotly_chart(fig)
     
-        # Clear existing database
-        db.session.query(Car).delete()
-        
-        # Process and insert data
-        for _, row in cars_df.iterrows():
-            new_car = Car(
-                price=row['price'],
-                mileage=row['mileage'],
-                year_of_registration=row['year_of_registration'],
-                standard_make=row['standard_make'],
-                standard_model=row['standard_model'])
-            db.session.add(new_car)
-        db.session.commit()
-
-        # Preprocess data and train model
-        processed_data, encoder, filtered_df = preprocess_data(cars_df, training=True)
-        X = processed_data
-        y = filtered_df['price'].values
-        
-        model = LinearRegression()
-        model.fit(X, y)
-
-        # Generate summary statistics
-        summary = {
-            'total_listings': int(len(filtered_df)),
-            'average_price': float(filtered_df['price'].mean()),
-            'min_price': float(filtered_df['price'].min()),
-            'max_price': float(filtered_df['price'].max()),
-            'average_mileage': float(filtered_df['mileage'].mean()),
-            'most_common_makes': {k: int(v) for k, v in filtered_df['standard_make'].value_counts().head().to_dict().items()}}
-
-        return jsonify(summary)
-        
-    except Exception as e:
-        return jsonify({"error": f"Failed to load data: {str(e)}"}), 500
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    '''
-    Predict car price based on features
-    ---
-    parameters:
-      - name: body
-        in: body
-        required: true
-        schema:
-          type: object
-          properties:
-            make:
-              type: string
-              description: Car manufacturer
-              required: true
-            model:
-              type: string
-              description: Car model
-              required: true
-            year:
-              type: integer
-              description: Year of registration
-              required: true
-            mileage:
-              type: integer
-              description: Current mileage of the car
-              required: true
-    responses:
-      200:
-        description: Predicted car price
-    '''
-    global model, encoder
-    
-    if model is None or encoder is None:
-        return jsonify({"error": "Model not loaded. Call /reload first."}), 400
-        
-    # Validate required parameters
-    required_params = ['make', 'model', 'year', 'mileage']
-    if not all(param in request.json for param in required_params):
-        return jsonify({"error": "Missing required parameters. Required: make, model, year, mileage"}), 400
-        
-    data = request.json
-    
-    try:
-        # Create input DataFrame with parameters in specified order
-        input_df = pd.DataFrame([{
-            'standard_make': data['make'],
-            'standard_model': data['model'],
-            'year_of_registration': data['year'],
-            'mileage': data['mileage'],
-            'price': 0}])
-
-        # Preprocess and predict
-        processed_data, _, _ = preprocess_data(input_df, encoder=encoder, training=False)
-        predicted_price = model.predict(processed_data)[0]
-        return jsonify({"predicted_price": float(predicted_price)})
-
-    except Exception as e:
-        return jsonify({"error": f"Prediction error: {str(e)}"}), 500
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    main()
