@@ -101,8 +101,11 @@ def main():
     st.sidebar.header("Summary Statistics")
     stats = {
         "Total Cars": f"{len(df):,}",
-        "Average Price": format_currency(df['price'].mean()),
+        "Average Price": f"${df['price'].mean():,.2f}",
         "Average Mileage": f"{df['mileage'].mean():,.0f}"
+    }
+    for label, value in stats.items():
+        st.sidebar.write(f"{label}: {value}")
     }
     for label, value in stats.items():
         st.sidebar.write(f"{label}: {value}")
@@ -144,7 +147,7 @@ def main():
             
             # Make prediction
             predicted_price = model.predict(X)[0]
-            st.success(f"Predicted Price: {format_currency(predicted_price)}")
+            st.success(f"Predicted Price: ${predicted_price:,.2f}")
 
     with tab2:
         viz_type = st.selectbox("Choose Visualization",
