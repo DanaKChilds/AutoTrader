@@ -6,7 +6,6 @@ A Streamlit web application that predicts used car prices based on make, model, 
 
 - Price prediction using Ridge Regression
 - Interactive data visualizations
-- Real-time model training
 - User-friendly interface
 - Data filtering and preprocessing
 
@@ -32,7 +31,7 @@ The application uses a **Ridge Regression Model** to predict car prices based on
    - One-hot encoding for categorical variables
 
 2. **Model Training**: 
-   - Ridge regression with alpha=0.000001
+   - Ridge regression
    - Features include mileage, year, make, and model
    - Cached training for better performance
 
@@ -96,7 +95,6 @@ AutoTrader/
 ├── app.py              # Main Streamlit application
 ├── requirements.txt    # Project dependencies
 ├── README.md          # Project documentation
-└── .gitignore         # Git ignore file
 ```
 
 ## Dependencies
