@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from sklearn.linear_model import Ridge
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 import numpy as np
 import urllib.request
@@ -105,32 +105,36 @@ def train_model(df):
     try:
         logger.info("-" * 50)
         logger.info("Starting model training")
-        numeric_features = ['mileage', 'year_of_registration']
-        X_numeric = df[numeric_features].values
-        logger.info(f"Numeric features shape: {X_numeric.shape}")
         
-        # Initialize and fit preprocessors
+        # Initialize encoders
+        make_encoder = LabelEncoder()
+        model_encoder = LabelEncoder()
+        
+        # Encode categorical features
+        encoded_make = make_encoder.fit_transform(df['standard_make'])
+        encoded_model = model_encoder.fit_transform(df['standard_model'])
+        logger.info(f"Encoded {len(make_encoder.classes_)} makes and {len(model_encoder.classes_)} models")
+        
+        # Combine all features
+        X = np.column_stack([
+            df['mileage'].values,
+            df['year_of_registration'].values,
+            encoded_make,
+            encoded_model
+        ])
+        logger.info(f"Combined feature matrix shape: {X.shape}")
+        
+        # Scale features
         scaler = StandardScaler()
-        imputer = SimpleImputer(strategy='mean')
+        X = scaler.fit_transform(X)
         
-        # Fit and transform numeric features
-        X_numeric = imputer.fit_transform(X_numeric)
-        X_numeric = scaler.fit_transform(X_numeric)
-        logger.info("Numeric features processed")
-        
-        # Prepare categorical features
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        X_cat = encoder.fit_transform(df[['standard_make', 'standard_model']])
-        logger.info(f"Categorical features shape: {X_cat.shape}")
-        
-        # Combine features and train model
-        X = np.column_stack((X_numeric, X_cat))
-        ridge_model = Ridge(alpha=0.000001)
+        # Train model
+        ridge_model = Ridge(alpha=0.001)
         ridge_model.fit(X, df['price'].values)
         logger.info("Model training completed successfully")
         logger.info("-" * 50)
         
-        return ridge_model, encoder, scaler, imputer
+        return ridge_model, make_encoder, model_encoder, scaler
     except Exception as e:
         logger.error(f"Model training error: {str(e)}", exc_info=True)
         st.error(f"Failed to train model: {str(e)}")
@@ -193,36 +197,26 @@ def main():
             if st.button("Predict"):
                 logger.info("-" * 50)
                 logger.info("Starting prediction process")
-                ridge_model, encoder, scaler, imputer = train_model(df)
-                if None in (ridge_model, encoder, scaler, imputer):
+                ridge_model, make_encoder, model_encoder, scaler = train_model(df)
+                
+                if None in (ridge_model, make_encoder, model_encoder, scaler):
                     logger.error("Model initialization failed")
                     st.error("Failed to initialize model")
                     return
                 
-                logger.info(f"Input data - Make: {make}, Model: {selected_model}, Year: {year}, Mileage: {mileage}")
-                input_data = pd.DataFrame([{
-                    'standard_make': make,
-                    'standard_model': selected_model,
-                    'mileage': mileage,
-                    'year_of_registration': year
-                }])
-                
                 try:
-                    # Process features
-                    logger.info("Processing input features")
-                    X_numeric = prepare_features(
-                        input_data, 
-                        ['mileage', 'year_of_registration'], 
-                        imputer, 
-                        scaler
-                    )
-                    logger.info(f"Numeric features processed: {X_numeric.shape}")
+                    # Create input features
+                    X = np.array([[
+                        mileage,
+                        year,
+                        make_encoder.transform([make])[0],
+                        model_encoder.transform([selected_model])[0]
+                    ]])
+                    logger.info(f"Created input array shape: {X.shape}")
                     
-                    X_cat = encoder.transform(input_data[['standard_make', 'standard_model']])
-                    logger.info(f"Categorical features processed: {X_cat.shape}")
-                    
-                    X = np.column_stack((X_numeric, X_cat))
-                    logger.info(f"Final feature matrix shape: {X.shape}")
+                    # Scale features
+                    X = scaler.transform(X)
+                    logger.info("Scaled input features")
                     
                     # Make prediction
                     predicted_price = ridge_model.predict(X)[0]
