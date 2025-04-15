@@ -9,10 +9,6 @@ import urllib.request
 import zipfile
 import io
 
-def format_currency(value):
-    """Format value as GBP currency"""
-    return f"£{value:,.2f}"
-
 def prepare_features(data, features, imputer=None, scaler=None):
     """Prepare numeric features with optional imputation and scaling"""
     X = data[features].values
@@ -53,16 +49,16 @@ def create_visualization(df, viz_type, selected_make):
     if viz_type == "Price Distribution":
         return px.histogram(viz_df, x="price", 
                           title="Car Price Distribution",
-                          labels={"price": "Price (£)", "count": "Number of Cars"})
+                          labels={"price": "Price ($)", "count": "Number of Cars"})
     elif viz_type == "Price vs. Mileage":
         return px.scatter(viz_df, x="mileage", y="price",
                          title="Price vs. Mileage",
-                         labels={"mileage": "Mileage", "price": "Price (£)"})
+                         labels={"mileage": "Mileage", "price": "Price ($)"})
     else:
         avg_price = viz_df.groupby("standard_make")["price"].mean().reset_index()
         return px.bar(avg_price, x="standard_make", y="price",
                      title="Average Price by Make",
-                     labels={"standard_make": "Make", "price": "Average Price (£)"})
+                     labels={"standard_make": "Make", "price": "Average Price ($)"})
 
 @st.cache_resource
 def train_model(df):
