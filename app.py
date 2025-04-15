@@ -106,9 +106,6 @@ def main():
     }
     for label, value in stats.items():
         st.sidebar.write(f"{label}: {value}")
-        
-    for label, value in stats.items():
-        st.sidebar.write(f"{label}: {value}")
     
     # Create tabs
     tab1, tab2 = st.tabs(["Price Prediction", "Data Analysis"])
