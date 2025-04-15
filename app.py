@@ -1,14 +1,26 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
 import numpy as np
 import urllib.request
 import zipfile
 import io
 
-# Data Load and Clean
+def format_currency(value):
+    """Format value as GBP currency"""
+    return f"£{value:,.2f}"
+
+def prepare_features(data, features, imputer=None, scaler=None):
+    """Prepare numeric features with optional imputation and scaling"""
+    X = data[features].values
+    if imputer:
+        X = imputer.transform(X)
+    if scaler:
+        X = scaler.transform(X)
+    return X
 
 @st.cache_data
 def load_data():
@@ -23,12 +35,9 @@ def clean_data(df):
     """Clean and filter data"""
     numeric_cols = ['price', 'mileage', 'year_of_registration']
     df = df.copy()
-    
-    # Ensure values are numeric
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
     df = df.dropna(subset=numeric_cols)
     
-    # Removing Outliers
     masks = {
         'price': (df['price'] >= 500) & (df['price'] <= 700000),
         'mileage': (df['mileage'] >= 0) & (df['mileage'] <= 400000),
@@ -37,8 +46,6 @@ def clean_data(df):
     }
     return df[np.all([masks[col] for col in numeric_cols], axis=0)]
 
-# Data Vizualizations 
-
 def create_visualization(df, viz_type, selected_make):
     """Create visualization based on type"""
     viz_df = df if selected_make == "All" else df[df["standard_make"] == selected_make]
@@ -46,62 +53,82 @@ def create_visualization(df, viz_type, selected_make):
     if viz_type == "Price Distribution":
         return px.histogram(viz_df, x="price", 
                           title="Car Price Distribution",
-                          labels={"price": "Price ($)", "count": "Number of Cars"})
+                          labels={"price": "Price (£)", "count": "Number of Cars"})
     elif viz_type == "Price vs. Mileage":
         return px.scatter(viz_df, x="mileage", y="price",
                          title="Price vs. Mileage",
-                         labels={"mileage": "Mileage", "price": "Price ($)"})
+                         labels={"mileage": "Mileage", "price": "Price (£)"})
     else:
         avg_price = viz_df.groupby("standard_make")["price"].mean().reset_index()
         return px.bar(avg_price, x="standard_make", y="price",
                      title="Average Price by Make",
-                     labels={"standard_make": "Make", "price": "Average Price ($)"})
-
-# Prediction Model
+                     labels={"standard_make": "Make", "price": "Average Price (£)"})
 
 @st.cache_resource
 def train_model(df):
     """Train and cache the price prediction model"""
-    X = df[['mileage', 'year_of_registration']].values
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-    make_model = encoder.fit_transform(df[['standard_make', 'standard_model']])
-    X = np.column_stack((X, make_model))
+    numeric_features = ['mileage', 'year_of_registration']
+    X_numeric = df[numeric_features].values
     
-    model = LinearRegression()
+    # Initialize and fit preprocessors
+    scaler = StandardScaler()
+    imputer = SimpleImputer(strategy='mean')
+    
+    # Fit and transform numeric features
+    X_numeric = imputer.fit_transform(X_numeric)
+    X_numeric = scaler.fit_transform(X_numeric)
+    
+    # Prepare categorical features
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+    X_cat = encoder.fit_transform(df[['standard_make', 'standard_model']])
+    
+    # Combine features and train model
+    X = np.column_stack((X_numeric, X_cat))
+    model = Ridge(alpha=0.000001)
     model.fit(X, df['price'].values)
-    return model, encoder
+    
+    return model, encoder, scaler, imputer
 
 def main():
-    st.title("Car Price Analysis Dashboard")
+    st.title("Auto Trader Price Predictor")
+    
+    # Add reload button in sidebar
+    if st.sidebar.button("Reload Data"):
+        st.cache_data.clear()
+        st.rerun()
     
     # Load and clean data
-    if 'data' not in st.session_state or st.sidebar.button("Reload Data"):
-        with st.spinner("Loading data..."):
-            df = clean_data(load_data())
-            st.session_state.data = df
-            st.success("Data loaded successfully!")
-    
-    df = st.session_state.data
-    
+    df = load_data()
+    df = clean_data(df)
+
     # Display summary statistics
     st.sidebar.header("Summary Statistics")
-    st.sidebar.write(f"Total Cars: {len(df):,}")
-    st.sidebar.write(f"Average Price: ${df['price'].mean():,.2f}")
-    st.sidebar.write(f"Average Mileage: {df['mileage'].mean():,.0f}")
+    stats = {
+        "Total Cars": f"{len(df):,}",
+        "Average Price": format_currency(df['price'].mean()),
+        "Average Mileage": f"{df['mileage'].mean():,.0f}"
+    }
+    for label, value in stats.items():
+        st.sidebar.write(f"{label}: {value}")
     
-    # Create tabs for analysis and prediction
+    # Create tabs
     tab1, tab2 = st.tabs(["Price Prediction", "Data Analysis"])
     
     with tab1:
         st.header("Predict Car Price")
-        make = st.selectbox("Make", sorted(df["standard_make"].unique()), key="pred_make")
-        models = sorted(df[df["standard_make"] == make]["standard_model"].unique())
-        model = st.selectbox("Model", models, key="pred_model")
-        year = st.number_input("Year", min_value=1980, max_value=2025, value=2020)
-        mileage = st.number_input("Mileage", min_value=0, max_value=500000, value=50000)
+        
+        # Input controls in two columns
+        col1, col2 = st.columns(2)
+        with col1:
+            make = st.selectbox("Make", sorted(df["standard_make"].unique()), key="pred_make")
+            year = st.number_input("Year", min_value=1980, max_value=2025, value=2020)
+        with col2:
+            models = sorted(df[df["standard_make"] == make]["standard_model"].unique())
+            model = st.selectbox("Model", models, key="pred_model")
+            mileage = st.number_input("Mileage", min_value=0, max_value=500000, value=50000)
         
         if st.button("Predict"):
-            model, encoder = train_model(df)
+            model, encoder, scaler, imputer = train_model(df)
             input_data = pd.DataFrame([{
                 'standard_make': make,
                 'standard_model': model,
@@ -109,12 +136,19 @@ def main():
                 'year_of_registration': year
             }])
             
-            X = input_data[['mileage', 'year_of_registration']].values
-            make_model = encoder.transform(input_data[['standard_make', 'standard_model']])
-            X = np.column_stack((X, make_model))
+            # Process features
+            X_numeric = prepare_features(
+                input_data, 
+                ['mileage', 'year_of_registration'], 
+                imputer, 
+                scaler
+            )
+            X_cat = encoder.transform(input_data[['standard_make', 'standard_model']])
+            X = np.column_stack((X_numeric, X_cat))
             
-            price = model.predict(X)[0]
-            st.success(f"Predicted Price: ${price:,.2f}")
+            # Make prediction
+            predicted_price = model.predict(X)[0]
+            st.success(f"Predicted Price: {format_currency(predicted_price)}")
 
     with tab2:
         viz_type = st.selectbox("Choose Visualization",
@@ -124,6 +158,6 @@ def main():
         
         fig = create_visualization(df, viz_type, selected_make)
         st.plotly_chart(fig)
-    
+
 if __name__ == "__main__":
     main()
