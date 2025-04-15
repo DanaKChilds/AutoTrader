@@ -106,7 +106,7 @@ def main():
     }
     for label, value in stats.items():
         st.sidebar.write(f"{label}: {value}")
-    }
+        
     for label, value in stats.items():
         st.sidebar.write(f"{label}: {value}")
     
