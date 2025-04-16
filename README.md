@@ -11,7 +11,7 @@ A Streamlit web application that predicts used car prices based on make, model, 
 
 ## Data Source
 
-The data used for this project comes from the [Auto Trader Car Sale Adverts Dataset](https://www.kaggle.com/datasets/shayanshahid997/autotrader-at-car-sale-adverts-dataset), which provides detailed information about Auto Trader vehicle listings.
+The data used for this project comes from the [Auto Trader Car Sale Adverts Dataset](https://www.kaggle.com/datasets/shayanshahid997/autotrader-at-car-sale-adverts-dataset), which provides detailed information about Auto Trader used vehicle listings.
 
 The dataset includes important features such as:
 - **Price**: The selling price of the car
@@ -28,7 +28,7 @@ The application uses a **Ridge Regression Model** to predict car prices based on
    - Cleaning of numerical values
    - Handling missing values using mean imputation
    - Scaling features using StandardScaler
-   - One-hot encoding for categorical variables
+   - Label encoding for categorical variables
 
 2. **Model Training**: 
    - Ridge regression
