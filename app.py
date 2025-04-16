@@ -1,3 +1,5 @@
+# Import packages
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -7,6 +9,8 @@ import numpy as np
 import urllib.request
 import zipfile
 import io
+
+# Data Preprocessing
 
 @st.cache_data(ttl=3600)
 def load_and_clean_data():
@@ -27,6 +31,8 @@ def load_and_clean_data():
         (df['mileage'].between(0, 400000)) &
         (df['year_of_registration'].between(1980, 2025))
     ].dropna(subset=numeric_cols)
+
+# Setting up model
 
 @st.cache_resource
 def train_model(df):
